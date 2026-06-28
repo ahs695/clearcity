@@ -6,7 +6,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.db.connection import get_db
-from app.models.db_models import AttributionResult, Station
+from app.models.db_models import AttributionResult, Station, AQIReading
 
 router = APIRouter()
 
@@ -72,23 +72,34 @@ def trigger_attribution(body: TriggerBody, db: Session = Depends(get_db)):
     if not station:
         raise HTTPException(status_code=404, detail=f"Station {body.station_id} not found")
 
-    # Try to find the most recent result for this station
-    r = (
-        db.query(AttributionResult)
-        .filter(AttributionResult.station_id == body.station_id)
-        .order_by(desc(AttributionResult.triggered_at))
+    # Get latest reading for the station to pass to run_attribution
+    latest = (
+        db.query(AQIReading)
+        .filter(AQIReading.station_id == body.station_id)
+        .order_by(desc(AQIReading.recorded_at))
         .first()
     )
-    
-    # Fallback to ANY result if none for this station
-    if r is None:
-        r = db.query(AttributionResult).order_by(desc(AttributionResult.triggered_at)).first()
-        
-    if r is None:
-        raise HTTPException(
-            status_code=404, 
-            detail="No attribution results available. Please ensure the database is seeded."
-        )
+    aqi = latest.aqi if (latest and latest.aqi is not None) else 100
+    wind_speed = float(latest.wind_speed) if (latest and latest.wind_speed is not None) else 2.0
+    wind_direction = latest.wind_direction if (latest and latest.wind_direction is not None) else 180
 
-    # Always return a result in demo mode to keep the UI active
-    return _to_summary(r, station.name)
+    from app.agents.attribution_agent import run_attribution
+    res = run_attribution(
+        station_id=body.station_id,
+        aqi=aqi,
+        wind_speed=wind_speed,
+        wind_direction=wind_direction,
+        db=db,
+        force=body.force,
+    )
+    
+    return AttributionSummary(
+        id=res["id"],
+        station_id=res["station_id"],
+        station_name=station.name,
+        aqi_at_trigger=res["aqi_at_trigger"],
+        wind_speed=res["wind_speed"],
+        wind_direction=res["wind_direction"],
+        triggered_at=res["triggered_at"],
+        attributed_sources=res["attributed_sources"],
+    )

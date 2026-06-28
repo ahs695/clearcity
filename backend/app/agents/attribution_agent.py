@@ -43,21 +43,19 @@ def run_attribution(
     wind_speed: float,
     wind_direction: int,
     db: Session,
+    force: bool = False,
 ) -> dict:
     # ── Step 1: Demo mode — read from pre-seeded DB ──────────────────────────
-    if settings.demo_mode:
+    if settings.demo_mode and not force:
         r = (
             db.query(AttributionResult)
             .filter(AttributionResult.station_id == station_id)
             .order_by(desc(AttributionResult.triggered_at))
             .first()
         )
-        if r is None:
-            r = db.query(AttributionResult).first()
-        if r is None:
-            logger.warning("No attribution results seeded; returning fallback for %s", station_id)
-            return {**_FALLBACK, "station_id": station_id, "aqi_at_trigger": aqi}
-        return _result_to_dict(r)
+        if r is not None:
+            return _result_to_dict(r)
+
 
     # ── Step 2: Spatial scoring via PostGIS ──────────────────────────────────
     upwind_bearing = (wind_direction + 180) % 360
